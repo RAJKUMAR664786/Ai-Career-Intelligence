@@ -1,0 +1,162 @@
+import React, { createContext, useContext, useState, useEffect } from "react";
+import { 
+  auth, 
+  db, 
+  signInWithEmailAndPassword, 
+  signOut, 
+  sendPasswordResetEmail, 
+  onAuthStateChanged,
+  doc, 
+  getDoc, 
+  setDoc,
+  isFirebaseConfigured,
+  getFirebaseErrorMessage 
+} from "../services/firebase";
+
+const AuthContext = createContext();
+
+export const AuthProvider = ({ children }) => {
+  const [currentUser, setCurrentUser] = useState(null);
+  const [userProfile, setUserProfile] = useState(null);
+  const [profileMissing, setProfileMissing] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [authError, setAuthError] = useState(null);
+
+  const isConfigured = isFirebaseConfigured();
+
+  // Listen to Firebase auth state changes
+  useEffect(() => {
+    if (isConfigured && auth) {
+      const unsubscribe = onAuthStateChanged(auth, async (user) => {
+        setCurrentUser(user);
+        if (user) {
+          try {
+            if (db) {
+              const userDocRef = doc(db, "users", user.uid);
+              const snap = await getDoc(userDocRef);
+              if (snap.exists()) {
+                setUserProfile(snap.data());
+                setProfileMissing(false);
+              } else {
+                // Pre-authorized account exists in Firebase Auth, but Firestore student record is not yet provisioned
+                console.warn(`[Student Profile] Firestore record users/${user.uid} not found. Profile setup pending admin authorization.`);
+                setUserProfile(null);
+                setProfileMissing(true);
+              }
+            }
+          } catch (err) {
+            console.error("Failed to load user profile from Firestore:", err);
+            setUserProfile(null);
+            setProfileMissing(true);
+          }
+        } else {
+          setUserProfile(null);
+          setProfileMissing(false);
+        }
+        setLoading(false);
+      });
+      return unsubscribe;
+    } else {
+      setLoading(false);
+    }
+  }, [isConfigured]);
+
+  // Login handler - Authenticate only against authorized Firebase Authentication accounts
+  const login = async (email, password) => {
+    setAuthError(null);
+    const cleanEmail = email.trim().toLowerCase();
+
+    if (!isConfigured || !auth) {
+      const msg = "Firebase Authentication is not configured. Please ensure environment variables are configured in .env.";
+      setAuthError(msg);
+      return { success: false, error: msg };
+    }
+
+    try {
+      const res = await signInWithEmailAndPassword(auth, cleanEmail, password);
+      return { success: true, user: res.user };
+    } catch (err) {
+      if (import.meta.env.DEV) {
+        console.info("[Firebase Diagnostic] Login failed with error code:", err?.code || "unknown");
+      }
+      const friendlyMessage = getFirebaseErrorMessage(err);
+      setAuthError(friendlyMessage);
+      return { success: false, error: friendlyMessage };
+    }
+  };
+
+  // Logout handler - signs out of Firebase session, clears local state
+  const logout = async () => {
+    try {
+      if (auth) {
+        await signOut(auth);
+      }
+      setCurrentUser(null);
+      setUserProfile(null);
+      setProfileMissing(false);
+      return { success: true };
+    } catch (err) {
+      console.error("Logout error:", err);
+      return { success: false, error: err.message };
+    }
+  };
+
+  // Password reset email handler for authorized students
+  const resetPassword = async (email) => {
+    setAuthError(null);
+    const cleanEmail = email.trim().toLowerCase();
+
+    if (!isConfigured || !auth) {
+      return { success: false, error: "Firebase Authentication is not configured." };
+    }
+
+    try {
+      await sendPasswordResetEmail(auth, cleanEmail);
+      return { success: true, message: "Password reset link sent to your registered student email." };
+    } catch (err) {
+      if (import.meta.env.DEV) {
+        console.info("[Firebase Diagnostic] Password reset failed with error code:", err?.code || "unknown");
+      }
+      const friendlyMessage = getFirebaseErrorMessage(err);
+      return { success: false, error: friendlyMessage };
+    }
+  };
+
+  // Update profile in Firestore (merge)
+  const updateUserProfileData = async (partialData) => {
+    if (!currentUser) return;
+    const updated = { ...(userProfile || {}), ...partialData, updatedAt: new Date().toISOString() };
+    setUserProfile(updated);
+
+    if (isConfigured && db && currentUser.uid) {
+      try {
+        const ref = doc(db, "users", currentUser.uid);
+        await setDoc(ref, partialData, { merge: true });
+      } catch (err) {
+        console.warn("Firestore update warning:", err);
+      }
+    }
+  };
+
+  return (
+    <AuthContext.Provider
+      value={{
+        currentUser,
+        userProfile,
+        profileMissing,
+        loading,
+        authError,
+        isConfigured,
+        login,
+        logout,
+        resetPassword,
+        updateUserProfileData
+      }}
+    >
+      {children}
+    </AuthContext.Provider>
+  );
+};
+
+export const useAuth = () => useContext(AuthContext);
+

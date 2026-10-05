@@ -1,0 +1,507 @@
+rules_version = '2';
+
+// ===============================================================
+// Assumed Data Model & Architecture
+// ===============================================================
+//
+// Application: AI Career Intelligence (Student Career Platform)
+//
+// 1. Collection: users/{userId}
+//    Document ID: Firebase Auth UID of the student
+//    Fields:
+//      - uid: string (optional, if present must match userId, immutable)
+//      - personalInfo: map (required)
+//          * name: string (required, 1-100 chars)
+//          * email: string (required, valid email pattern, 5-100 chars)
+//          * phone: string (optional, 0-25 chars)
+//          * college: string (optional, 0-150 chars)
+//          * degree: string (optional, 0-100 chars)
+//          * department: string (optional, 0-100 chars)
+//          * year: string (optional, 0-50 chars)
+//          * semester: string (optional, 0-50 chars)
+//      - academicInfo: map (optional)
+//          * cgpa: number (optional, 0.0-10.0)
+//          * attendance: number (optional, 0-100)
+//          * academicScore: number (optional, 0-100)
+//          * backlogs: number (optional, 0-50)
+//          * semesterTrends: list of maps (optional, max 20 items)
+//          * subjectMarks: list of maps (optional, max 50 items)
+//      - skills: list of maps (optional, max 100 items)
+//          * name: string, level: number (0-100), verified: bool
+//      - projects: list of maps (optional, max 50 items)
+//      - certifications: list of maps (optional, max 50 items)
+//      - careerInterests: list of strings (optional, max 20 items, max 100 chars each)
+//      - selfAssessment: map (optional)
+//      - targetCareer: string (optional, max 100 chars)
+//      - profileCompletion: number (optional, 0-100)
+//      - createdAt: timestamp or string (optional, immutable)
+//      - updatedAt: timestamp or string (optional)
+//    Security Invariants:
+//      - Strictly read & written only by the authenticated student (request.auth.uid == userId).
+//      - Never publicly readable (PII Protection: email, phone, GPA).
+//      - Client cannot inject administrative privilege flags (isAdmin, role, permissions, etc.).
+//
+// 2. Collection: interviewSessions/{sessionId}
+//    Document ID: Generated session ID (e.g., interview_<timestamp> or Firestore push ID)
+//    Fields:
+//      - sessionId: string (optional, max 128 chars)
+//      - userId: string (required, must match request.auth.uid, immutable)
+//      - role: string (required, e.g. "Full Stack Developer", max 100 chars)
+//      - difficulty: string (optional, max 50 chars)
+//      - interviewType: string (optional, max 50 chars)
+//      - currentQuestionIndex: number (optional, >= 0 and <= 100)
+//      - totalQuestions: number (optional, 1 to 50)
+//      - question: string (optional, max 2000 chars)
+//      - questionType: string (optional, max 100 chars)
+//      - roundTitle: string (optional, max 150 chars)
+//      - questionId: number or string (optional)
+//      - timeLimitSeconds: number (optional, 10 to 600)
+//      - score: number (optional, 0-100)
+//      - overallScore: number (optional, 0-100)
+//      - breakdown: map (optional)
+//      - verdict: string (optional, max 250 chars)
+//      - chatHistory: list of maps (optional, max 100 items)
+//      - strengths: list of strings (optional, max 20 items, <= 200 chars each)
+//      - improvementAreas: list of strings (optional, max 20 items, <= 200 chars each)
+//      - status: string (optional, max 50 chars)
+//      - createdAt: timestamp or string (optional, immutable)
+//      - completedAt: timestamp or string (optional)
+//      - updatedAt: timestamp or string (optional)
+//    Security Invariants:
+//      - Read, create, update, delete only by the authenticated creator (resource.data.userId == request.auth.uid).
+//      - userId is required on create and cannot be modified on update.
+//
+// 3. Collection: skillAssessments/{assessmentId}
+//    Document ID: Generated assessment ID
+//    Fields:
+//      - assessmentId: string (optional, max 128 chars)
+//      - userId: string (required, must match request.auth.uid, immutable)
+//      - skillName: string (required, max 100 chars)
+//      - score: number (required, 0-100)
+//      - totalQuestions: number (optional, 1 to 100)
+//      - correctCount: number (optional, 0 to 100)
+//      - passed: bool (optional)
+//      - answers: map or list (optional)
+//      - feedback: string (optional, max 2000 chars)
+//      - details: map (optional)
+//      - createdAt: timestamp or string (optional, immutable)
+//      - completedAt: timestamp or string (optional)
+//    Security Invariants:
+//      - Read & write restricted strictly to the user matching userId.
+//      - userId cannot be reassigned or spoofed.
+//
+// 4. Collection: careerRecommendations/{recommendationId}
+//    Document ID: Generated recommendation ID
+//    Fields:
+//      - recommendationId: string (optional, max 128 chars)
+//      - userId: string (required, must match request.auth.uid, immutable)
+//      - targetCareer: string (required, max 100 chars)
+//      - selectedCareer: string (optional, max 100 chars)
+//      - topMatches: list of maps (optional, max 20 items)
+//      - whyThisCareer: map (optional)
+//      - fitScoreBreakdown: map (optional)
+//      - roadmap: list of maps (optional, max 30 items)
+//      - currentFocus: map (optional)
+//      - recommendedResources: list of maps (optional, max 30 items)
+//      - gapAnalysis: list of maps (optional, max 50 items)
+//      - suggestions: list of strings (optional, max 20 items, <= 300 chars each)
+//      - learningPath: list of maps (optional, max 20 items)
+//      - createdAt: timestamp or string (optional, immutable)
+//      - updatedAt: timestamp or string (optional)
+//    Security Invariants:
+//      - Read & write restricted strictly to the owner student.
+//
+// 5. Unspecified Collections / Root:
+//    - Default deny all operations.
+// ===============================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    // Check if the request is from an authenticated Firebase user
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Check if the authenticated user matches the specified userId
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Check if user is owner based on document's existing userId field
+    function isDocOwner() {
+      return isAuthenticated() && 
+             resource != null && 
+             (('userId' in resource.data && resource.data.userId == request.auth.uid) ||
+              ('uid' in resource.data && resource.data.uid == request.auth.uid));
+    }
+
+    // Ensure UID hasn't been spoofed on create (if present in document)
+    function uidUnchanged() {
+      return !('uid' in request.resource.data) || request.resource.data.uid == request.auth.uid;
+    }
+
+    // Ensure UID cannot be altered on update (if present in document)
+    function uidNotModified() {
+      return !('uid' in request.resource.data) || request.resource.data.uid == resource.data.uid;
+    }
+
+    // Ensure client is not attempting to write or escalate administrative privileges
+    function hasNoAdminFields() {
+      return !request.resource.data.keys().hasAny([
+        'role', 
+        'isAdmin', 
+        'isStaff', 
+        'isSuperAdmin', 
+        'permissions', 
+        'disabled', 
+        'admin'
+      ]);
+    }
+
+    // Validate that immutable fields remain untouched during updates
+    function areImmutableFieldsUnchanged(fields) {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(fields);
+    }
+
+    // Check email pattern
+    function isValidEmail(email) {
+      return email is string &&
+             email.size() >= 5 &&
+             email.size() <= 100 &&
+             email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    // Validate URL format (http or https)
+    function isValidUrl(url) {
+      return url is string &&
+             url.size() <= 500 &&
+             (url.matches("^https://.*") || url.matches("^http://.*"));
+    }
+
+    // ===============================================================
+    // Domain Validators (Validator Function Pattern)
+    // ===============================================================
+
+    // Validate User Profile Document
+    function isValidUser(data) {
+      let allowedKeys = [
+        'uid', 
+        'fullName',
+        'email',
+        'course',
+        'institution',
+        'department',
+        'year',
+        'semester',
+        'phone',
+        'personalInfo', 
+        'academicInfo', 
+        'skills', 
+        'projects', 
+        'certifications', 
+        'careerInterests', 
+        'selfAssessment', 
+        'targetCareer', 
+        'profileCompletion', 
+        'createdAt', 
+        'updatedAt'
+      ];
+
+      return data.keys().hasOnly(allowedKeys) &&
+             // Identification: require at least personalInfo map or fullName/email
+             (('personalInfo' in data && data.personalInfo is map) || 
+              ('fullName' in data && data.fullName is string) ||
+              ('email' in data && isValidEmail(data.email))) &&
+             // If personalInfo map is present, validate nested structure
+             (!('personalInfo' in data) || (
+               data.personalInfo is map &&
+               (!('name' in data.personalInfo) || (data.personalInfo.name is string && data.personalInfo.name.size() <= 100)) &&
+               (!('email' in data.personalInfo) || isValidEmail(data.personalInfo.email)) &&
+               (!('phone' in data.personalInfo) || (data.personalInfo.phone is string && data.personalInfo.phone.size() <= 25)) &&
+               (!('college' in data.personalInfo) || (data.personalInfo.college is string && data.personalInfo.college.size() <= 150)) &&
+               (!('degree' in data.personalInfo) || (data.personalInfo.degree is string && data.personalInfo.degree.size() <= 100)) &&
+               (!('department' in data.personalInfo) || (data.personalInfo.department is string && data.personalInfo.department.size() <= 100)) &&
+               (!('year' in data.personalInfo) || (data.personalInfo.year is string && data.personalInfo.year.size() <= 50)) &&
+               (!('semester' in data.personalInfo) || (data.personalInfo.semester is string && data.personalInfo.semester.size() <= 50))
+             )) &&
+             // Optional flat fields validation
+             (!('fullName' in data) || (data.fullName is string && data.fullName.size() <= 100)) &&
+             (!('email' in data) || isValidEmail(data.email)) &&
+             (!('course' in data) || (data.course is string && data.course.size() <= 100)) &&
+             (!('institution' in data) || (data.institution is string && data.institution.size() <= 150)) &&
+             (!('department' in data) || (data.department is string && data.department.size() <= 100)) &&
+             (!('year' in data) || (data.year is string && data.year.size() <= 50)) &&
+             (!('semester' in data) || (data.semester is string && data.semester.size() <= 50)) &&
+             (!('phone' in data) || (data.phone is string && data.phone.size() <= 25)) &&
+             // academicInfo optional validations
+             (!('academicInfo' in data) || (
+               data.academicInfo is map &&
+               (!('cgpa' in data.academicInfo) || (data.academicInfo.cgpa is number && data.academicInfo.cgpa >= 0 && data.academicInfo.cgpa <= 10)) &&
+               (!('attendance' in data.academicInfo) || (data.academicInfo.attendance is number && data.academicInfo.attendance >= 0 && data.academicInfo.attendance <= 100)) &&
+               (!('academicScore' in data.academicInfo) || (data.academicInfo.academicScore is number && data.academicInfo.academicScore >= 0 && data.academicInfo.academicScore <= 100)) &&
+               (!('backlogs' in data.academicInfo) || (data.academicInfo.backlogs is number && data.academicInfo.backlogs >= 0 && data.academicInfo.backlogs <= 50)) &&
+               (!('semesterTrends' in data.academicInfo) || (data.academicInfo.semesterTrends is list && data.academicInfo.semesterTrends.size() <= 20)) &&
+               (!('subjectMarks' in data.academicInfo) || (data.academicInfo.subjectMarks is list && data.academicInfo.subjectMarks.size() <= 50))
+             )) &&
+             // Collections/Lists size limits for DoS protection
+             (!('skills' in data) || (data.skills is list && data.skills.size() <= 100)) &&
+             (!('projects' in data) || (data.projects is list && data.projects.size() <= 50)) &&
+             (!('certifications' in data) || (data.certifications is list && data.certifications.size() <= 50)) &&
+             (!('careerInterests' in data) || (data.careerInterests is list && data.careerInterests.size() <= 20)) &&
+             (!('selfAssessment' in data) || data.selfAssessment is map) &&
+             (!('targetCareer' in data) || (data.targetCareer is string && data.targetCareer.size() <= 100)) &&
+             (!('profileCompletion' in data) || (data.profileCompletion is number && data.profileCompletion >= 0 && data.profileCompletion <= 100)) &&
+             (!('uid' in data) || (data.uid is string && data.uid.size() <= 128)) &&
+             (!('createdAt' in data) || data.createdAt is timestamp || data.createdAt is string) &&
+             (!('updatedAt' in data) || data.updatedAt is timestamp || data.updatedAt is string);
+    }
+
+    // Validate Interview Session Document
+    function isValidInterviewSession(data) {
+      let allowedKeys = [
+        'sessionId', 
+        'userId', 
+        'role', 
+        'difficulty', 
+        'interviewType', 
+        'currentQuestionIndex', 
+        'totalQuestions', 
+        'question', 
+        'questionType', 
+        'roundTitle', 
+        'questionId', 
+        'timeLimitSeconds', 
+        'score', 
+        'overallScore', 
+        'breakdown', 
+        'verdict', 
+        'chatHistory', 
+        'strengths', 
+        'improvementAreas', 
+        'status', 
+        'createdAt', 
+        'completedAt', 
+        'updatedAt'
+      ];
+
+      return data.keys().hasOnly(allowedKeys) &&
+             // Required fields
+             ('userId' in data) &&
+             data.userId is string &&
+             data.userId.size() >= 1 &&
+             data.userId.size() <= 128 &&
+             ('role' in data) &&
+             data.role is string &&
+             data.role.size() >= 1 &&
+             data.role.size() <= 100 &&
+             // Field constraints & type validation
+             (!('difficulty' in data) || (data.difficulty is string && data.difficulty.size() <= 50)) &&
+             (!('interviewType' in data) || (data.interviewType is string && data.interviewType.size() <= 50)) &&
+             (!('currentQuestionIndex' in data) || (data.currentQuestionIndex is number && data.currentQuestionIndex >= 0 && data.currentQuestionIndex <= 100)) &&
+             (!('totalQuestions' in data) || (data.totalQuestions is number && data.totalQuestions >= 1 && data.totalQuestions <= 50)) &&
+             (!('question' in data) || (data.question is string && data.question.size() <= 2000)) &&
+             (!('questionType' in data) || (data.questionType is string && data.questionType.size() <= 100)) &&
+             (!('roundTitle' in data) || (data.roundTitle is string && data.roundTitle.size() <= 150)) &&
+             (!('timeLimitSeconds' in data) || (data.timeLimitSeconds is number && data.timeLimitSeconds >= 10 && data.timeLimitSeconds <= 600)) &&
+             (!('score' in data) || (data.score is number && data.score >= 0 && data.score <= 100)) &&
+             (!('overallScore' in data) || (data.overallScore is number && data.overallScore >= 0 && data.overallScore <= 100)) &&
+             (!('breakdown' in data) || data.breakdown is map) &&
+             (!('verdict' in data) || (data.verdict is string && data.verdict.size() <= 250)) &&
+             (!('chatHistory' in data) || (data.chatHistory is list && data.chatHistory.size() <= 100)) &&
+             (!('strengths' in data) || (data.strengths is list && data.strengths.size() <= 20)) &&
+             (!('improvementAreas' in data) || (data.improvementAreas is list && data.improvementAreas.size() <= 20)) &&
+             (!('status' in data) || (data.status is string && data.status.size() <= 50)) &&
+             (!('createdAt' in data) || data.createdAt is timestamp || data.createdAt is string) &&
+             (!('completedAt' in data) || data.completedAt is timestamp || data.completedAt is string) &&
+             (!('updatedAt' in data) || data.updatedAt is timestamp || data.updatedAt is string);
+    }
+
+    // Validate Skill Assessment Attempt Document
+    function isValidSkillAssessment(data) {
+      let allowedKeys = [
+        'assessmentId', 
+        'userId', 
+        'skillName', 
+        'score', 
+        'totalQuestions', 
+        'correctCount', 
+        'passed', 
+        'answers', 
+        'feedback', 
+        'details', 
+        'createdAt', 
+        'completedAt'
+      ];
+
+      return data.keys().hasOnly(allowedKeys) &&
+             // Required fields
+             ('userId' in data) &&
+             data.userId is string &&
+             data.userId.size() >= 1 &&
+             data.userId.size() <= 128 &&
+             ('skillName' in data) &&
+             data.skillName is string &&
+             data.skillName.size() >= 1 &&
+             data.skillName.size() <= 100 &&
+             ('score' in data) &&
+             data.score is number &&
+             data.score >= 0 &&
+             data.score <= 100 &&
+             // Optional fields
+             (!('totalQuestions' in data) || (data.totalQuestions is number && data.totalQuestions >= 1 && data.totalQuestions <= 100)) &&
+             (!('correctCount' in data) || (data.correctCount is number && data.correctCount >= 0 && data.correctCount <= 100)) &&
+             (!('passed' in data) || data.passed is bool) &&
+             (!('answers' in data) || (data.answers is list || data.answers is map)) &&
+             (!('feedback' in data) || (data.feedback is string && data.feedback.size() <= 2000)) &&
+             (!('details' in data) || data.details is map) &&
+             (!('createdAt' in data) || data.createdAt is timestamp || data.createdAt is string) &&
+             (!('completedAt' in data) || data.completedAt is timestamp || data.completedAt is string);
+    }
+
+    // Validate Career Recommendation Document
+    function isValidCareerRecommendation(data) {
+      let allowedKeys = [
+        'recommendationId', 
+        'userId', 
+        'targetCareer', 
+        'selectedCareer', 
+        'topMatches', 
+        'whyThisCareer', 
+        'fitScoreBreakdown', 
+        'roadmap', 
+        'currentFocus', 
+        'recommendedResources', 
+        'gapAnalysis', 
+        'suggestions', 
+        'learningPath', 
+        'createdAt', 
+        'updatedAt'
+      ];
+
+      return data.keys().hasOnly(allowedKeys) &&
+             // Required fields
+             ('userId' in data) &&
+             data.userId is string &&
+             data.userId.size() >= 1 &&
+             data.userId.size() <= 128 &&
+             ('targetCareer' in data) &&
+             data.targetCareer is string &&
+             data.targetCareer.size() >= 1 &&
+             data.targetCareer.size() <= 100 &&
+             // Optional fields
+             (!('selectedCareer' in data) || (data.selectedCareer is string && data.selectedCareer.size() <= 100)) &&
+             (!('topMatches' in data) || (data.topMatches is list && data.topMatches.size() <= 20)) &&
+             (!('whyThisCareer' in data) || data.whyThisCareer is map) &&
+             (!('fitScoreBreakdown' in data) || data.fitScoreBreakdown is map) &&
+             (!('roadmap' in data) || (data.roadmap is list && data.roadmap.size() <= 30)) &&
+             (!('currentFocus' in data) || data.currentFocus is map) &&
+             (!('recommendedResources' in data) || (data.recommendedResources is list && data.recommendedResources.size() <= 30)) &&
+             (!('gapAnalysis' in data) || (data.gapAnalysis is list && data.gapAnalysis.size() <= 50)) &&
+             (!('suggestions' in data) || (data.suggestions is list && data.suggestions.size() <= 20)) &&
+             (!('learningPath' in data) || (data.learningPath is list && data.learningPath.size() <= 20)) &&
+             (!('createdAt' in data) || data.createdAt is timestamp || data.createdAt is string) &&
+             (!('updatedAt' in data) || data.updatedAt is timestamp || data.updatedAt is string);
+    }
+
+    // ===============================================================
+    // Collection Rules
+    // ===============================================================
+
+    // 1. Student Profiles Collection
+    match /users/{userId} {
+      // Only the document owner can read their profile (protects PII: email, phone, GPA)
+      allow read: if isOwner(userId);
+
+      // Create: Authenticated student creates their own document with validation
+      allow create: if isOwner(userId) &&
+                       uidUnchanged() &&
+                       hasNoAdminFields() &&
+                       isValidUser(request.resource.data);
+
+      // Update: Owner can update profile with strict schema validation; prevents uid and creation tampering
+      allow update: if isOwner(userId) &&
+                       uidNotModified() &&
+                       hasNoAdminFields() &&
+                       isValidUser(request.resource.data) &&
+                       areImmutableFieldsUnchanged(['uid', 'createdAt']);
+
+      // Delete: Student can delete their own profile account
+      allow delete: if isOwner(userId);
+    }
+
+    // 2. AI Mock Interview Sessions
+    match /interviewSessions/{sessionId} {
+      // Read: Only the session owner can view their interview session
+      allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
+
+      // Create: Authenticated user creates session linked to their own UID
+      allow create: if isAuthenticated() &&
+                       request.resource.data.userId == request.auth.uid &&
+                       isValidInterviewSession(request.resource.data);
+
+      // Update: Owner updates interview progress/scores with domain validation and immutable userId
+      allow update: if isAuthenticated() &&
+                       resource.data.userId == request.auth.uid &&
+                       request.resource.data.userId == request.auth.uid &&
+                       isValidInterviewSession(request.resource.data) &&
+                       areImmutableFieldsUnchanged(['userId', 'createdAt']);
+
+      // Delete: Owner can delete their interview session history
+      allow delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+    }
+
+    // 3. Technical Skill Assessment Tests
+    match /skillAssessments/{assessmentId} {
+      // Read: Only the student who took the test can read their assessment score
+      allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
+
+      // Create: Must be authenticated and record assessment for own UID
+      allow create: if isAuthenticated() &&
+                       request.resource.data.userId == request.auth.uid &&
+                       isValidSkillAssessment(request.resource.data);
+
+      // Update: Owner can update assessment state, keeping userId immutable
+      allow update: if isAuthenticated() &&
+                       resource.data.userId == request.auth.uid &&
+                       request.resource.data.userId == request.auth.uid &&
+                       isValidSkillAssessment(request.resource.data) &&
+                       areImmutableFieldsUnchanged(['userId', 'createdAt']);
+
+      // Delete: Owner can remove their test record
+      allow delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+    }
+
+    // 4. Personalized Career Recommendations & Roadmaps
+    match /careerRecommendations/{recommendationId} {
+      // Read: Only the student can read their personalized recommendations
+      allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
+
+      // Create: Must be authenticated and record recommendation for own UID
+      allow create: if isAuthenticated() &&
+                       request.resource.data.userId == request.auth.uid &&
+                       isValidCareerRecommendation(request.resource.data);
+
+      // Update: Owner can refresh recommendation roadmap, keeping userId immutable
+      allow update: if isAuthenticated() &&
+                       resource.data.userId == request.auth.uid &&
+                       request.resource.data.userId == request.auth.uid &&
+                       isValidCareerRecommendation(request.resource.data) &&
+                       areImmutableFieldsUnchanged(['userId', 'createdAt']);
+
+      // Delete: Owner can remove their recommendation record
+      allow delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+    }
+
+    // ===============================================================
+    // Default Deny Rule for Unspecified Paths
+    // ===============================================================
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
