@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { 
   Sparkles, 
   Database, 
@@ -283,9 +283,17 @@ const SettingsPage = () => {
               <span className="badge bg-success-subtle text-success px-3 py-1.5 rounded-pill fw-semibold border border-success-subtle">
                 ● Database Online
               </span>
-            ) : diagnostics.firestore?.status === "action_required" ? (
+            ) : (diagnostics.firestore?.status === "action_required" || diagnostics.firestore?.status === "not_created") ? (
               <span className="badge bg-warning-subtle text-warning-emphasis px-3 py-1.5 rounded-pill fw-semibold border border-warning-subtle">
-                ● Action Required (Database Not Created)
+                ● Database Not Initialized
+              </span>
+            ) : diagnostics.firestore?.status === "unavailable" ? (
+              <span className="badge bg-warning-subtle text-warning-emphasis px-3 py-1.5 rounded-pill fw-semibold border border-warning-subtle">
+                ● Database Unavailable
+              </span>
+            ) : diagnostics.firestore?.status === "network_error" ? (
+              <span className="badge bg-danger-subtle text-danger px-3 py-1.5 rounded-pill fw-semibold border border-danger-subtle">
+                ● Network Error
               </span>
             ) : diagnostics.firestore?.status === "not_configured" ? (
               <span className="badge bg-warning-subtle text-warning-emphasis px-3 py-1.5 rounded-pill fw-semibold border border-warning-subtle">
@@ -320,7 +328,7 @@ const SettingsPage = () => {
           </div>
         </div>
 
-        {diagnostics.firestore?.status === "action_required" && (
+        {(diagnostics.firestore?.status === "action_required" || diagnostics.firestore?.status === "not_created") && (
           <div className="alert alert-warning border-0 rounded-3 p-3 small mb-0 d-flex flex-column gap-2">
             <div className="d-flex align-items-start gap-2">
               <AlertCircle size={18} className="text-warning-emphasis flex-shrink-0 mt-0.5" />

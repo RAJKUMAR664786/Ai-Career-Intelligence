@@ -48,9 +48,11 @@ const SkillAssessment = () => {
     }
   };
 
+  const skillsKey = (skills || []).map((s) => `${s.name}:${s.level}`).join("|");
+
   useEffect(() => {
     fetchGapAnalysis(targetCareer);
-  }, [targetCareer, skills]);
+  }, [targetCareer, skillsKey]);
 
   const handleCareerChange = (newCareer) => {
     setTargetCareer(newCareer);

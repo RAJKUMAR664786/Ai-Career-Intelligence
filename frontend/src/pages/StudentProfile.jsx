@@ -62,6 +62,30 @@ const StudentProfile = () => {
         </div>
       </div>
 
+      {profileMissing && (
+        <div className="alert alert-warning border-0 rounded-4 p-3.5 mb-4 shadow-sm d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-3" style={{ backgroundColor: "#fef3c7" }}>
+          <div className="d-flex align-items-center gap-3">
+            <div className="rounded-circle p-2 d-flex align-items-center justify-content-center bg-warning text-dark flex-shrink-0" style={{ width: "36px", height: "36px" }}>
+              <Sparkles size={18} />
+            </div>
+            <div>
+              <div className="fw-bold text-dark" style={{ fontSize: "0.92rem" }}>
+                Student Profile Document Pending
+              </div>
+              <div className="text-secondary small">
+                No profile document was found in Cloud Firestore for your UID. Click <strong>Initialize Profile</strong> to save your profile details.
+              </div>
+            </div>
+          </div>
+          <button 
+            onClick={() => setIsEditOpen(true)}
+            className="btn btn-warning btn-sm px-3 py-1.5 rounded-pill fw-semibold text-dark flex-shrink-0 shadow-sm"
+          >
+            Initialize Profile
+          </button>
+        </div>
+      )}
+
       <div className="row g-4">
         {/* Left / Center Major Column */}
         <div className="col-lg-8">
@@ -88,31 +112,33 @@ const StudentProfile = () => {
               <div className="row g-3 flex-grow-1">
                 <div className="col-sm-6">
                   <div className="text-secondary small">Name</div>
-                  <div className="fw-bold text-dark">{personalInfo.name}</div>
+                  <div className="fw-bold text-dark">{personalInfo?.name || "Not specified"}</div>
                 </div>
                 <div className="col-sm-6">
                   <div className="text-secondary small">Degree</div>
-                  <div className="fw-bold text-dark">{personalInfo.degree}</div>
+                  <div className="fw-bold text-dark">{personalInfo?.degree || "Not specified"}</div>
                 </div>
                 <div className="col-sm-6">
                   <div className="text-secondary small">Email</div>
-                  <div className="fw-bold text-dark">{personalInfo.email}</div>
+                  <div className="fw-bold text-dark">{personalInfo?.email || "Not specified"}</div>
                 </div>
                 <div className="col-sm-6">
                   <div className="text-secondary small">Department</div>
-                  <div className="fw-bold text-dark">{personalInfo.department}</div>
+                  <div className="fw-bold text-dark">{personalInfo?.department || "Not specified"}</div>
                 </div>
                 <div className="col-sm-6">
                   <div className="text-secondary small">Phone</div>
-                  <div className="fw-bold text-dark">{personalInfo.phone}</div>
+                  <div className="fw-bold text-dark">{personalInfo?.phone || "Not specified"}</div>
                 </div>
                 <div className="col-sm-6">
                   <div className="text-secondary small">Year / Semester</div>
-                  <div className="fw-bold text-dark">{personalInfo.year} • {personalInfo.semester}</div>
+                  <div className="fw-bold text-dark">
+                    {personalInfo?.year || personalInfo?.semester ? `${personalInfo?.year || ""} • ${personalInfo?.semester || ""}` : "Not specified"}
+                  </div>
                 </div>
                 <div className="col-12">
                   <div className="text-secondary small">College</div>
-                  <div className="fw-bold text-dark">{personalInfo.college}</div>
+                  <div className="fw-bold text-dark">{personalInfo?.college || "Not specified"}</div>
                 </div>
               </div>
             </div>

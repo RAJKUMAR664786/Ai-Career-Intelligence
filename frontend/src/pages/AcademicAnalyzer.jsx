@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { 
   Sparkles, 
   TrendingUp, 
@@ -37,7 +37,7 @@ const AcademicAnalyzer = () => {
 
   useEffect(() => {
     fetchInsights();
-  }, [academicInfo]);
+  }, [academicInfo?.cgpa, academicInfo?.attendance, academicInfo?.backlogs]);
 
   const trends = academicInfo.semesterTrends || [
     { semester: "Sem 1", gpa: 7.20 },

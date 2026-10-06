@@ -8,6 +8,7 @@ const config = {
   storageBucket: "ai-student-intelligence-ed261.firebasestorage.app",
   messagingSenderId: "152802312703",
   appId: "1:152802312703:web:913361dea511200379a7ca"
+
 };
 
 console.log("Testing Firestore with Project ID:", config.projectId);

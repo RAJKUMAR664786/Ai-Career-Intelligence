@@ -22,7 +22,7 @@ const DashboardOverview = () => {
   const { currentUser, userProfile } = useAuth();
   const { personalInfo, academicInfo, targetCareer } = profile;
 
-  const greetingName = userProfile?.fullName || personalInfo.name || currentUser?.displayName || currentUser?.email?.split("@")[0] || "Student";
+  const greetingName = profile?.personalInfo?.name || userProfile?.fullName || userProfile?.personalInfo?.name || currentUser?.displayName || currentUser?.email?.split("@")[0] || "Student";
 
   return (
     <div className="container-fluid p-0">

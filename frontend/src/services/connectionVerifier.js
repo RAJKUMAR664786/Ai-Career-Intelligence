@@ -1,4 +1,4 @@
-import { getActiveFirebaseConfig } from "./firebase.js";
+import { getActiveFirebaseConfig, db, doc, getDoc } from "./firebase.js";
 
 /**
  * Diagnostic Service for Truthful System Connectivity Verification
@@ -151,71 +151,118 @@ export const verifyFirestoreConnection = async () => {
     };
   }
 
+  // 1. Primary Probe: Query dedicated backend probe on port 5000 (free of browser CORS restrictions)
   try {
-    const probeUrl = `https://firestore.googleapis.com/v1/projects/${config.projectId}/databases/(default)/documents?key=${config.apiKey || ""}`;
-    const res = await fetch(probeUrl);
+    const backendProbeRes = await fetch("http://localhost:5000/api/health/firestore", {
+      method: "GET",
+      headers: { "Accept": "application/json" }
+    });
 
-    // If 404 HTML, database (default) has not been initialized in the console yet
-    if (res.status === 404) {
+    if (backendProbeRes.ok) {
+      const data = await backendProbeRes.json();
       return {
         service: "firestore",
-        status: "action_required",
-        configured: true,
-        projectId: config.projectId,
-        code: "DATABASE_NOT_CREATED",
-        message: `Cloud Firestore Database has not been initialized yet in project '${config.projectId}'.`,
-        actionLabel: "Create Firestore Database",
-        actionUrl: `https://console.firebase.google.com/project/${config.projectId}/firestore`
+        status: data.status || (data.connected ? "connected" : "action_required"),
+        configured: Boolean(data.configured),
+        projectId: data.projectId || config.projectId,
+        code: data.code,
+        latencyMs: data.latencyMs,
+        message: data.message,
+        actionLabel: data.actionLabel,
+        actionUrl: data.actionUrl
       };
     }
+  } catch (backendErr) {
+    // Backend offline or unreachable - continue to SDK probe fallback
+  }
 
-    const text = await res.text();
-    let data = {};
+  // 2. Fallback Probe: Direct Firestore Web SDK check with timeout
+  if (db) {
     try {
-      data = JSON.parse(text);
-    } catch (e) {}
+      const testRef = doc(db, "_system_health", "ping");
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("FIRESTORE_SDK_TIMEOUT")), 3500)
+      );
 
-    // Check for API disabled error
-    if (data?.error?.message && data.error.message.includes("Cloud Firestore API has not been used")) {
-      return {
-        service: "firestore",
-        status: "action_required",
-        configured: true,
-        projectId: config.projectId,
-        code: "API_DISABLED_OR_DATABASE_MISSING",
-        message: `Cloud Firestore is disabled or not created in project '${config.projectId}'. Please enable it in the Firebase Console.`,
-        actionLabel: "Enable Firestore in Firebase Console",
-        actionUrl: `https://console.firebase.google.com/project/${config.projectId}/firestore`
-      };
-    }
+      await Promise.race([getDoc(testRef), timeoutPromise]);
 
-    // 200 or 403 (with JSON error from security rules, meaning database exists and rules are active)
-    if (res.ok || (res.status === 403 && data?.error?.status === "PERMISSION_DENIED")) {
       return {
         service: "firestore",
         status: "connected",
         configured: true,
         projectId: config.projectId,
-        message: `Cloud Firestore is online and enforcing security rules for project '${config.projectId}'.`
+        message: `Cloud Firestore is online and accessible for project '${config.projectId}'.`
+      };
+    } catch (sdkErr) {
+      const msg = sdkErr.message || "";
+      const code = sdkErr.code || "";
+
+      if (code === "permission-denied" || msg.includes("permission-denied") || msg.includes("insufficient permissions")) {
+        return {
+          service: "firestore",
+          status: "connected",
+          code: "PERMISSION_DENIED_ENFORCED",
+          configured: true,
+          projectId: config.projectId,
+          message: `Cloud Firestore is online and active. Security rules are properly enforcing UID-level authorization for project '${config.projectId}'.`
+        };
+      }
+
+      if (code === "not-found" || msg.includes("Cloud Firestore API has not been used") || msg.includes("NOT_FOUND")) {
+        return {
+          service: "firestore",
+          status: "not_created",
+          configured: true,
+          projectId: config.projectId,
+          code: "DATABASE_NOT_CREATED",
+          message: `Cloud Firestore database '(default)' has not been created yet in project '${config.projectId}'.`,
+          actionLabel: "Create Firestore Database in Firebase Console",
+          actionUrl: `https://console.firebase.google.com/project/${config.projectId}/firestore`
+        };
+      }
+
+      if (code === "unavailable" || msg === "FIRESTORE_SDK_TIMEOUT") {
+        return {
+          service: "firestore",
+          status: "unavailable",
+          configured: true,
+          projectId: config.projectId,
+          code: "DATABASE_UNINITIALIZED_OR_OFFLINE",
+          message: `Cloud Firestore backend could not be reached for project '${config.projectId}'. The database has not been created yet or is unreachable from your network.`,
+          actionLabel: "Create Database in Firebase Console",
+          actionUrl: `https://console.firebase.google.com/project/${config.projectId}/firestore`
+        };
+      }
+
+      if (msg.includes("Failed to fetch") || msg.includes("network")) {
+        return {
+          service: "firestore",
+          status: "network_error",
+          configured: true,
+          projectId: config.projectId,
+          code: "NETWORK_ERROR",
+          message: `Network error connecting to Firestore servers. Check your internet connection or proxy settings.`
+        };
+      }
+
+      return {
+        service: "firestore",
+        status: "error",
+        configured: true,
+        projectId: config.projectId,
+        code: code || "UNKNOWN_ERROR",
+        message: msg || "Firestore probe encountered an unexpected error."
       };
     }
-
-    return {
-      service: "firestore",
-      status: "error",
-      configured: true,
-      projectId: config.projectId,
-      message: data?.error?.message || `Firestore returned status ${res.status}.`
-    };
-  } catch (err) {
-    return {
-      service: "firestore",
-      status: "disconnected",
-      configured: true,
-      projectId: config.projectId,
-      message: `Network error connecting to Cloud Firestore: ${err.message}`
-    };
   }
+
+  return {
+    service: "firestore",
+    status: "not_configured",
+    configured: false,
+    projectId: config.projectId,
+    message: "Firestore instance is not initialized. Please verify frontend Firebase configuration."
+  };
 };
 
 // 4. Combined Diagnostic Probe

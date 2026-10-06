@@ -113,6 +113,9 @@ let authInstance = null;
 let dbInstance = null;
 
 export const initFirebase = () => {
+  if (appInstance && authInstance && dbInstance) {
+    return { app: appInstance, auth: authInstance, db: dbInstance };
+  }
   const config = getActiveFirebaseConfig();
   if (config.apiKey && config.projectId) {
     try {
@@ -127,7 +130,7 @@ export const initFirebase = () => {
       console.error("Firebase initialization error:", err);
     }
   }
-  return { app: null, auth: null, db: null };
+  return { app: appInstance, auth: authInstance, db: dbInstance };
 };
 
 // Auto-initialize if configured

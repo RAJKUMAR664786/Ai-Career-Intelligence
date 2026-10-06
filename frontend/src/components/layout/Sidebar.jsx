@@ -23,9 +23,9 @@ const Sidebar = ({ isOpen, onClose }) => {
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
 
-  // Student name and degree priority: authenticated profile -> personalInfo -> auth user
-  const studentName = userProfile?.fullName || currentUser?.displayName || currentUser?.email?.split("@")[0] || "Student";
-  const studentCourse = userProfile?.course || (profileMissing ? "Setup Pending" : profile?.personalInfo?.degree || "Engineering Student");
+  // Student name and degree priority: check active student profile and auth profile synchronously
+  const studentName = profile?.personalInfo?.name || userProfile?.fullName || userProfile?.personalInfo?.name || currentUser?.displayName || currentUser?.email?.split("@")[0] || "Student";
+  const studentCourse = profile?.personalInfo?.degree || userProfile?.course || userProfile?.personalInfo?.degree || (profileMissing ? "Setup Pending" : "Engineering Student");
   const studentAvatarChar = studentName.charAt(0).toUpperCase();
 
   const handleLogout = async () => {

@@ -33,19 +33,21 @@ export const AuthProvider = ({ children }) => {
           try {
             if (db) {
               const userDocRef = doc(db, "users", user.uid);
-              const snap = await getDoc(userDocRef);
+              const timeoutPromise = new Promise((_, reject) =>
+                setTimeout(() => reject(new Error("PROFILE_FETCH_TIMEOUT")), 3500)
+              );
+              const snap = await Promise.race([getDoc(userDocRef), timeoutPromise]);
               if (snap.exists()) {
                 setUserProfile(snap.data());
                 setProfileMissing(false);
               } else {
-                // Pre-authorized account exists in Firebase Auth, but Firestore student record is not yet provisioned
-                console.warn(`[Student Profile] Firestore record users/${user.uid} not found. Profile setup pending admin authorization.`);
+                console.warn(`[Student Profile] Firestore record users/${user.uid} not found.`);
                 setUserProfile(null);
                 setProfileMissing(true);
               }
             }
           } catch (err) {
-            console.error("Failed to load user profile from Firestore:", err);
+            console.warn("Could not load user profile from Firestore on boot:", err.message || err);
             setUserProfile(null);
             setProfileMissing(true);
           }
@@ -122,20 +124,69 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  // Update profile in Firestore (merge)
-  const updateUserProfileData = async (partialData) => {
-    if (!currentUser) return;
-    const updated = { ...(userProfile || {}), ...partialData, updatedAt: new Date().toISOString() };
-    setUserProfile(updated);
+  // Reload user profile directly from Firestore
+  const reloadUserProfile = async (targetUser = currentUser) => {
+    if (!targetUser || !db) return null;
+    try {
+      const userDocRef = doc(db, "users", targetUser.uid);
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("PROFILE_RELOAD_TIMEOUT")), 3500)
+      );
+      const snap = await Promise.race([getDoc(userDocRef), timeoutPromise]);
+      if (snap.exists()) {
+        const data = snap.data();
+        setUserProfile(data);
+        setProfileMissing(false);
+        return data;
+      } else {
+        setUserProfile(null);
+        setProfileMissing(true);
+        return null;
+      }
+    } catch (err) {
+      console.warn("Failed to reload user profile:", err.message || err);
+      return null;
+    }
+  };
+
+  // Update profile in Firestore (merge) and update state functionally
+  const updateUserProfileData = async (partialData, options = {}) => {
+    if (!currentUser) {
+      throw new Error("Your session has expired. Please log in again.");
+    }
+
+    const payload = {
+      ...partialData,
+      updatedAt: new Date().toISOString()
+    };
+
+    // Update state functionally to avoid stale closure overwrites
+    setUserProfile((prev) => ({
+      ...(prev || {}),
+      ...payload
+    }));
+    setProfileMissing(false);
+
+    // If caller already performed the remote write, skip duplicate network call
+    if (options.skipRemoteWrite) {
+      return { success: true };
+    }
 
     if (isConfigured && db && currentUser.uid) {
       try {
         const ref = doc(db, "users", currentUser.uid);
-        await setDoc(ref, partialData, { merge: true });
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("Unable to connect to the database. Your changes were not saved.")), 8000)
+        );
+        await Promise.race([setDoc(ref, payload, { merge: true }), timeoutPromise]);
+        return { success: true };
       } catch (err) {
-        console.warn("Firestore update warning:", err);
+        console.error("Firestore update error:", err);
+        throw err;
       }
     }
+
+    return { success: true };
   };
 
   return (
@@ -150,7 +201,8 @@ export const AuthProvider = ({ children }) => {
         login,
         logout,
         resetPassword,
-        updateUserProfileData
+        updateUserProfileData,
+        reloadUserProfile
       }}
     >
       {children}
